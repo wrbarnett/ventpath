@@ -1,0 +1,329 @@
+import math
+from typing import List
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+
+st.set_page_config(page_title="VentPath LOS", page_icon="🧭", layout="wide")
+
+st.title("ICU Length of Stay Predictor")
+st.caption(
+	"This tool estimates ICU length of stay using patient characteristics, treatment intensity," 
+	"and ventilatory management factors derived from a retrospective cohort." 
+	"Predictions are intended for risk stratification and planning, not causal inference or bedside decision-making."
+)
+
+RAW_PARALYTIC_COLS: List[str] = [
+    "succinylcholine_days",
+    "vecuronium_days",
+    "rocuronium_days",
+    "cisatracurium_days",
+]
+
+FEATURE_COLS: List[str] = [
+    "total_exposure_mcg",
+    "max_deterioration_index",
+    "propofol",
+    "midazolam",
+    "dexmedetomidine",
+    "morphine",
+    "age_years",
+    "bmi",
+    "sodium",
+    "potassium",
+    "phosphorus",
+    "magnesium",
+    "calcium",
+    "liver_disease",
+    "copd",
+    "asthma",
+    "osa_ohs",
+    "ild",
+    "tobacco_use",
+    "esrd_hd",
+    "ckd",
+    "neuromuscular_disorder",
+    "any_paralytic",
+    "total_paralytic_days",
+]
+
+TARGET_COL = "icu_los_days"
+
+NUMERIC_COLS = FEATURE_COLS.copy()
+BINARY_COLS = [
+    "propofol",
+    "midazolam",
+    "dexmedetomidine",
+    "morphine",
+    "liver_disease",
+    "copd",
+    "asthma",
+    "osa_ohs",
+    "ild",
+    "tobacco_use",
+    "esrd_hd",
+    "ckd",
+    "neuromuscular_disorder",
+    "any_paralytic",
+]
+
+DEFAULTS = {
+    "total_exposure_mcg": 2500.0,
+    "max_deterioration_index": 90.0,
+    "propofol": 1,
+    "midazolam": 1,
+    "dexmedetomidine": 0,
+    "morphine": 0,
+    "age_years": 65.0,
+    "bmi": 28.0,
+    "sodium": 137.0,
+    "potassium": 3.5,
+    "phosphorus": 2.8,
+    "magnesium": 1.8,
+    "calcium": 8.0,
+    "liver_disease": 0,
+    "copd": 1,
+    "asthma": 0,
+    "osa_ohs": 0,
+    "ild": 0,
+    "tobacco_use": 0,
+    "esrd_hd": 0,
+    "ckd": 1,
+    "neuromuscular_disorder": 0,
+    "any_paralytic": 1,
+    "total_paralytic_days": 1.0,
+}
+
+HELP_TEXT = {
+    "total_exposure_mcg": "Cumulative fentanyl exposure in micrograms.",
+    "max_deterioration_index": "Maximum Epic deterioration index used in your modeling workflow.",
+    "bmi": "Body mass index in kg/m².",
+    "any_paralytic": "Any neuromuscular blockade during fentanyl administration.",
+    "total_paralytic_days": "Total days of paralytic exposure during fentanyl administration.",
+}
+
+
+def safe_log1p_target(y: pd.Series) -> pd.Series:
+    return np.log1p(y.clip(lower=0))
+
+
+@st.cache_resource
+def train_model(csv_path: str = "fent26_final.csv"):
+    df = pd.read_csv(csv_path)
+
+    numeric_candidates = list(set(FEATURE_COLS + [TARGET_COL, "vent_days"] + RAW_PARALYTIC_COLS))
+    for col in numeric_candidates:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Derive transformed variables from raw columns if they are not already present.
+    available_paralytic_cols = [c for c in RAW_PARALYTIC_COLS if c in df.columns]
+
+    if "total_paralytic_days" not in df.columns:
+        if available_paralytic_cols:
+            for col in available_paralytic_cols:
+                df[col] = df[col].fillna(0)
+            df["total_paralytic_days"] = df[available_paralytic_cols].sum(axis=1)
+        else:
+            df["total_paralytic_days"] = 0.0
+
+    if "any_paralytic" not in df.columns:
+        df["any_paralytic"] = (df["total_paralytic_days"].fillna(0) > 0).astype(int)
+
+    # Restrict to ventilated patients, as in your analysis.
+    if "vent_days" not in df.columns:
+        raise ValueError("The CSV must contain a 'vent_days' column.")
+
+    df = df[df["vent_days"].fillna(0) > 0].copy()
+    df = df[df[TARGET_COL] > 0].copy()
+
+    # Ensure all required feature columns exist after derivation.
+    missing_features = [c for c in FEATURE_COLS if c not in df.columns]
+    if missing_features:
+        raise ValueError(f"The CSV is missing required columns: {missing_features}")
+
+    # Binary cleanup.
+    for col in BINARY_COLS:
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
+            df[col] = (df[col] > 0).astype(int)
+
+    model_df = df[FEATURE_COLS + [TARGET_COL]].copy()
+
+    X = model_df[FEATURE_COLS]
+    y = safe_log1p_target(model_df[TARGET_COL])
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "num",
+                Pipeline([
+                    ("imputer", SimpleImputer(strategy="median")),
+                ]),
+                NUMERIC_COLS,
+            )
+        ],
+        remainder="drop",
+    )
+
+    model = GradientBoostingRegressor(
+        n_estimators=300,
+        learning_rate=0.05,
+        max_depth=3,
+        random_state=42,
+    )
+
+    pipe = Pipeline([
+        ("prep", preprocessor),
+        ("model", model),
+    ])
+    pipe.fit(X, y)
+
+    summary = {
+        "n": int(len(model_df)),
+        "target_median": float(df[TARGET_COL].median()),
+        "target_q1": float(df[TARGET_COL].quantile(0.25)),
+        "target_q3": float(df[TARGET_COL].quantile(0.75)),
+    }
+    return pipe, summary
+
+
+model, summary = train_model()
+
+with st.sidebar:
+    st.header("Inputs")
+    st.write("Enter patient and treatment characteristics.")
+
+    total_exposure_mcg = st.number_input(
+        "Total fentanyl exposure (mcg)",
+        min_value=0.0,
+        value=DEFAULTS["total_exposure_mcg"],
+        step=100.0,
+        help=HELP_TEXT["total_exposure_mcg"],
+    )
+    max_deterioration_index = st.number_input(
+        "Max deterioration index",
+        min_value=0.0,
+        value=DEFAULTS["max_deterioration_index"],
+        step=1.0,
+        help=HELP_TEXT["max_deterioration_index"],
+    )
+    age_years = st.number_input("Age (years)", min_value=18.0, max_value=120.0, value=DEFAULTS["age_years"], step=1.0)
+    bmi = st.number_input("BMI (kg/m²)", min_value=0.0, value=DEFAULTS["bmi"], step=0.1, help=HELP_TEXT["bmi"])
+
+    sodium = st.number_input("Sodium", min_value=0.0, value=DEFAULTS["sodium"], step=0.1)
+    potassium = st.number_input("Potassium", min_value=0.0, value=DEFAULTS["potassium"], step=0.1)
+    phosphorus = st.number_input("Phosphorus", min_value=0.0, value=DEFAULTS["phosphorus"], step=0.1)
+    magnesium = st.number_input("Magnesium", min_value=0.0, value=DEFAULTS["magnesium"], step=0.1)
+    calcium = st.number_input("Calcium", min_value=0.0, value=DEFAULTS["calcium"], step=0.1)
+
+    st.subheader("Sedatives and paralytics")
+    propofol = st.checkbox("Propofol", value=bool(DEFAULTS["propofol"]))
+    midazolam = st.checkbox("Midazolam", value=bool(DEFAULTS["midazolam"]))
+    dexmedetomidine = st.checkbox("Dexmedetomidine", value=bool(DEFAULTS["dexmedetomidine"]))
+    morphine = st.checkbox("Morphine", value=bool(DEFAULTS["morphine"]))
+    any_paralytic = st.checkbox("Any paralytic", value=bool(DEFAULTS["any_paralytic"]), help=HELP_TEXT["any_paralytic"])
+    total_paralytic_days = st.number_input(
+        "Total paralytic days",
+        min_value=0.0,
+        value=DEFAULTS["total_paralytic_days"],
+        step=0.5,
+        help=HELP_TEXT["total_paralytic_days"],
+    )
+
+    st.subheader("Comorbidities")
+    liver_disease = st.checkbox("Liver disease", value=bool(DEFAULTS["liver_disease"]))
+    copd = st.checkbox("COPD", value=bool(DEFAULTS["copd"]))
+    asthma = st.checkbox("Asthma", value=bool(DEFAULTS["asthma"]))
+    osa_ohs = st.checkbox("OSA/OHS", value=bool(DEFAULTS["osa_ohs"]))
+    ild = st.checkbox("Interstitial lung disease", value=bool(DEFAULTS["ild"]))
+    tobacco_use = st.checkbox("Tobacco use", value=bool(DEFAULTS["tobacco_use"]))
+    esrd_hd = st.checkbox("ESRD on hemodialysis", value=bool(DEFAULTS["esrd_hd"]))
+    ckd = st.checkbox("CKD", value=bool(DEFAULTS["ckd"]))
+    neuromuscular_disorder = st.checkbox("Neuromuscular disorder", value=bool(DEFAULTS["neuromuscular_disorder"]))
+
+input_row = pd.DataFrame([
+    {
+        "total_exposure_mcg": total_exposure_mcg,
+        "max_deterioration_index": max_deterioration_index,
+        "propofol": int(propofol),
+        "midazolam": int(midazolam),
+        "dexmedetomidine": int(dexmedetomidine),
+        "morphine": int(morphine),
+        "age_years": age_years,
+        "bmi": bmi,
+        "sodium": sodium,
+        "potassium": potassium,
+        "phosphorus": phosphorus,
+        "magnesium": magnesium,
+        "calcium": calcium,
+        "liver_disease": int(liver_disease),
+        "copd": int(copd),
+        "asthma": int(asthma),
+        "osa_ohs": int(osa_ohs),
+        "ild": int(ild),
+        "tobacco_use": int(tobacco_use),
+        "esrd_hd": int(esrd_hd),
+        "ckd": int(ckd),
+        "neuromuscular_disorder": int(neuromuscular_disorder),
+        "any_paralytic": int(any_paralytic),
+        "total_paralytic_days": total_paralytic_days,
+    }
+])[FEATURE_COLS]
+
+pred_log = model.predict(input_row)[0]
+pred_days = float(np.expm1(pred_log))
+
+
+def risk_band(days: float) -> str:
+    if days < 5:
+        return "Lower predicted ICU LOS"
+    if days < 10:
+        return "Moderate predicted ICU LOS"
+    return "Higher predicted ICU LOS"
+
+left, right = st.columns([1.2, 1])
+
+with left:
+    st.subheader("Prediction")
+    st.metric("Predicted ICU LOS", f"{pred_days:.1f} days")
+    st.write(f"**Risk band:** {risk_band(pred_days)}")
+
+    st.subheader("Reference cohort")
+    st.write(
+        f"Modeled on **{summary['n']:,}** mechanically ventilated patients. "
+        f"Median ICU LOS in the modeled cohort: **{summary['target_median']:.1f} days** "
+        f"[{summary['target_q1']:.1f}–{summary['target_q3']:.1f}]."
+    )
+
+with right:
+    st.subheader("Entered values")
+    st.dataframe(input_row.T.rename(columns={0: "Value"}), use_container_width=True)
+
+st.divider()
+
+st.subheader("Scenario analysis: fentanyl escalation")
+scenario_doses = [500, 2000, 6000, 20000]
+scenario_rows = []
+
+for dose in scenario_doses:
+    tmp = input_row.copy()
+    tmp["total_exposure_mcg"] = dose
+    scen_pred_days = float(np.expm1(model.predict(tmp)[0]))
+    scenario_rows.append({
+        "Fentanyl dose (mcg)": dose,
+        "Predicted ICU LOS (days)": round(scen_pred_days, 1),
+    })
+
+scenario_df = pd.DataFrame(scenario_rows)
+st.dataframe(scenario_df, use_container_width=True)
+
+st.caption(
+    "This app is intended for retrospective or educational use. It uses cumulative exposure and treatment-course variables, "
+    "so it should not be interpreted as an early bedside prediction model."
+)
