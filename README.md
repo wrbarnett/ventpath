@@ -75,7 +75,7 @@ Top contributing features (permutation importance):
 ### Laboratory Values
 - Sodium
 - Potassium
-- Phosphate
+- Phosphorus
 - Magnesium
 - Calcium
 
@@ -102,15 +102,6 @@ From raw inputs:
 - cisatracurium_days  
 
 ---
-
-## 🚀 Streamlit App
-
-The model is deployed as a Streamlit application:
-
-### Run locally:
-```bash
-streamlit run icu_los_streamlit_app.py
-```
 
 ### Features:
 - Interactive patient input
