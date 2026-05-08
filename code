@@ -13,8 +13,8 @@ st.set_page_config(page_title="VentPath LOS", page_icon="🧭", layout="wide")
 
 st.title("ICU Length of Stay Predictor")
 st.caption(
-	"This tool estimates ICU length of stay using patient characteristics, treatment intensity," 
-	"and ventilatory management factors derived from a retrospective cohort." 
+	"This tool estimates ICU length of stay using patient characteristics, treatment intensity, " 
+	"and ventilatory management factors derived from a retrospective cohort. " 
 	"Predictions are intended for risk stratification and planning, not causal inference or bedside decision-making."
 )
 
@@ -216,11 +216,11 @@ with st.sidebar:
     age_years = st.number_input("Age (years)", min_value=18.0, max_value=120.0, value=DEFAULTS["age_years"], step=1.0)
     bmi = st.number_input("BMI (kg/m²)", min_value=0.0, value=DEFAULTS["bmi"], step=0.1, help=HELP_TEXT["bmi"])
 
-    sodium = st.number_input("Sodium", min_value=0.0, value=DEFAULTS["sodium"], step=0.1)
-    potassium = st.number_input("Potassium", min_value=0.0, value=DEFAULTS["potassium"], step=0.1)
-    phosphorus = st.number_input("Phosphorus", min_value=0.0, value=DEFAULTS["phosphorus"], step=0.1)
-    magnesium = st.number_input("Magnesium", min_value=0.0, value=DEFAULTS["magnesium"], step=0.1)
-    calcium = st.number_input("Calcium", min_value=0.0, value=DEFAULTS["calcium"], step=0.1)
+    sodium = st.number_input("Sodium (mmol/L)", min_value=0.0, value=DEFAULTS["sodium"], step=0.1)
+    potassium = st.number_input("Potassium (mmol/L)", min_value=0.0, value=DEFAULTS["potassium"], step=0.1)
+    phosphorus = st.number_input("Phosphorus (mg/dL)", min_value=0.0, value=DEFAULTS["phosphorus"], step=0.1)
+    magnesium = st.number_input("Magnesium (mg/dL)", min_value=0.0, value=DEFAULTS["magnesium"], step=0.1)
+    calcium = st.number_input("Calcium (mg/dL)", min_value=0.0, value=DEFAULTS["calcium"], step=0.1)
 
     st.subheader("Sedatives and paralytics")
     propofol = st.checkbox("Propofol", value=bool(DEFAULTS["propofol"]))
@@ -327,3 +327,4 @@ st.caption(
     "This app is intended for retrospective or educational use. It uses cumulative exposure and treatment-course variables, "
     "so it should not be interpreted as an early bedside prediction model."
 )
+
