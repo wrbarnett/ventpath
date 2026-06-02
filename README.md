@@ -1,5 +1,7 @@
 <img width="256" height="256" alt="image" src="https://github.com/user-attachments/assets/780a24a5-6776-43b4-aaaf-2390a1a4f422" />
 
+<img width="512" height="256" alt="image" src="https://github.com/user-attachments/assets/f443d791-acf4-4320-b4e2-e32feba0916c" />
+
 # 🧭 VentPath LOS
 
 **Predicting ICU Length of Stay Using Clinical and Treatment Signals**
